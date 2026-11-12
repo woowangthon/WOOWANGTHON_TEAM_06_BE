@@ -98,6 +98,13 @@ class RecordIn(BaseModel):
     occurred_on: date
 
 
+class RecordPatch(BaseModel):
+    title: str | None = Field(default=None, min_length=1)
+    event_name: str | None = None
+    occurred_on: date | None = None
+    body: str | None = Field(default=None, min_length=1)
+
+
 class AskIn(BaseModel):
     question: str = Field(min_length=1)
 
@@ -204,6 +211,19 @@ def list_records(cohort_id: int | None = None, type: str | None = None, conn=Dep
 @app.get("/api/records/{rid}")
 def read_record(rid: int, conn=Depends(db)):
     return pub(service.get_record(conn, rid))
+
+
+@app.patch("/api/records/{rid}")
+def patch_record(rid: int, b: RecordPatch, conn=Depends(db)):
+    return pub(service.update_record(conn, rid, b.title, b.event_name, b.occurred_on, b.body))
+
+
+@app.delete("/api/records/{rid}")
+def remove_record(rid: int, conn=Depends(db)):
+    rec = service.delete_record(conn, rid)
+    if rec["pdf_path"]:
+        Path(rec["pdf_path"]).unlink(missing_ok=True)
+    return {"deleted": rid}
 
 
 @app.get("/api/records/{rid}/pdf")

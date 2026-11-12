@@ -133,3 +133,50 @@ def add_decision(conn, timeline_item_id, body, reason, decided_on: date):
                        (item["cohort_id"], timeline_item_id, body, reason, decided_on.isoformat()))
     add_record(conn, item["cohort_id"], "decision", f"{item['title']} 결정", f"{body} (이유: {reason})", item["event_name"], decided_on)
     return _one(conn, "select * from decisions where id=?", cur.lastrowid)
+
+
+def _drop_chunks(conn, rid):
+    for (cid,) in conn.execute("select id from chunks where record_id=?", (rid,)).fetchall():
+        conn.execute("delete from chunks_fts where rowid=?", (cid,))
+    conn.execute("delete from chunks where record_id=?", (rid,))
+
+
+def update_record(conn, rid, title=None, event_name=None, occurred_on: date | None = None, body=None):
+    """Edit a record. A new date shifts its timeline items by the same number of days; a new body rebuilds search passages."""
+    old = get_record(conn, rid)
+    new = {"title": title if title is not None else old["title"],
+           "event_name": event_name if event_name is not None else old["event_name"],
+           "body": body if body is not None else old["body"],
+           "occurred_on": occurred_on.isoformat() if occurred_on else old["occurred_on"]}
+    conn.execute("update records set title=?, event_name=?, body=?, occurred_on=? where id=?",
+                 (new["title"], new["event_name"], new["body"], new["occurred_on"], rid))
+    if occurred_on:
+        delta = (occurred_on - date.fromisoformat(old["occurred_on"])).days
+        if delta:
+            for it in conn.execute("select id, done_on from timeline_items where record_id=?", (rid,)).fetchall():
+                conn.execute("update timeline_items set done_on=? where id=?",
+                             ((date.fromisoformat(it["done_on"]) + timedelta(days=delta)).isoformat(), it["id"]))
+    if new["title"] != old["title"]:  # items that carry the record title follow it
+        conn.execute("update timeline_items set title=? where record_id=? and title=?", (new["title"], rid, old["title"]))
+    if new["title"] != old["title"] or new["body"] != old["body"]:
+        conn.execute("delete from records_fts where rowid=?", (rid,))
+        conn.execute("insert into records_fts(rowid,title,body) values (?,?,?)", (rid, new["title"], new["body"]))
+    if new["body"] != old["body"]:
+        _drop_chunks(conn, rid)
+        add_chunks(conn, rid, new["body"])
+    conn.commit()
+    return get_record(conn, rid)
+
+
+def delete_record(conn, rid):
+    """Remove a record with its passages, timeline items, the decisions made on those items, and the stored PDF."""
+    rec = get_record(conn, rid)
+    ids = [r[0] for r in conn.execute("select id from timeline_items where record_id=?", (rid,))]
+    for i in ids:
+        conn.execute("delete from decisions where timeline_item_id=?", (i,))
+    conn.execute("delete from timeline_items where record_id=?", (rid,))
+    _drop_chunks(conn, rid)
+    conn.execute("delete from records_fts where rowid=?", (rid,))
+    conn.execute("delete from records where id=?", (rid,))
+    conn.commit()
+    return rec

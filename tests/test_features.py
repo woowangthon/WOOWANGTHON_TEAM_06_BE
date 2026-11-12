@@ -127,3 +127,24 @@ def test_seed_on_empty_boot(tmp_path, monkeypatch):
     from app.main import app
     with TestClient(app) as c:
         assert len(c.get("/api/cohorts").json()) == 2
+
+
+def test_patch_date_shifts_items_and_search_follows_body(client, cohorts):
+    r = rec(client, cohorts[0], body="2025-11-04 체육대회를 진행했다.").json()
+    rid = r["record"]["id"]
+    p = client.patch(f"/api/records/{rid}", json={"occurred_on": "2025-11-14", "body": "2025-11-04 현수막을 제작했다."})
+    assert p.status_code == 200 and p.json()["occurred_on"] == "2025-11-14"
+    cards = client.get("/api/timeline/last-year", params={"date": "2026-11-14", "window_days": 1}).json()["cards"]
+    assert [c["done_on"] for c in cards] == ["2025-11-14"]
+    assert client.post("/api/ask", json={"question": "현수막은 어떻게 했어?"}).json()["sources"]
+
+
+def test_delete_removes_record_items_and_decisions(client, cohorts):
+    item = rec(client, cohorts[1], body="2026-11-04 체육대회를 진행했다.", occurred_on="2026-11-04").json()
+    rid, iid = item["record"]["id"], item["timeline_items"][0]["id"]
+    client.post("/api/decisions", json={"timeline_item_id": iid, "body": "간식 늘리기", "reason": "부족했다"})
+    assert client.delete(f"/api/records/{rid}").status_code == 200
+    assert client.get(f"/api/records/{rid}").status_code == 404
+    assert client.get("/api/decisions").json() == []
+    assert client.delete(f"/api/records/{rid}").status_code == 404
+    assert client.get("/api/timeline/last-year", params={"date": "2027-11-04", "window_days": 1}).json()["cards"] == []
