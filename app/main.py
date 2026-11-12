@@ -1,8 +1,11 @@
 from datetime import date
 from pathlib import Path
 
+import os
+import secrets
 import shutil
 import tempfile
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, Form, Query, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -15,8 +18,38 @@ from . import service
 from .db import connect, db_path
 from .extract import SUPPORTED, ExtractError, find_date, read_text
 
-app = FastAPI(title="졸업하지 않는 선배")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+@asynccontextmanager
+async def lifespan(_):
+    if os.environ.get("SEED_DEMO") == "1":  # first boot on a fresh disk: load the synthetic demo data
+        conn = connect()
+        if not conn.execute("select 1 from cohorts limit 1").fetchone():
+            from .seed import run
+            run(conn)
+        conn.close()
+    yield
+
+
+app = FastAPI(title="졸업하지 않는 선배", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def access_key(request, call_next):
+    """If APP_ACCESS_KEY is set, every /api call except health must carry it in X-Access-Key."""
+    key = os.environ.get("APP_ACCESS_KEY", "")
+    if key and request.method != "OPTIONS" and request.url.path.startswith("/api/") and request.url.path != "/api/health":
+        if not secrets.compare_digest(request.headers.get("x-access-key", ""), key):
+            return JSONResponse({"detail": "접근 키가 필요하다"}, status_code=401)
+    return await call_next(request)
+
+
+# added after the key check so CORS wraps it and 401s still reach the browser
+app.add_middleware(CORSMiddleware, allow_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",")],
+                   allow_methods=["*"], allow_headers=["*"])
+
+
+@app.get("/api/health")
+def health():
+    return {"ok": True}
 
 
 @app.exception_handler(RequestValidationError)

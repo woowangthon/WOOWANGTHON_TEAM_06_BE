@@ -5,4 +5,4 @@ pytest
 python-multipart
 pyhwp
 markitdown[pdf]
--e ../AI
+senior-ai @ git+https://github.com/woowangthon/WOOWANGTHON_TEAM_06_AI.git@main

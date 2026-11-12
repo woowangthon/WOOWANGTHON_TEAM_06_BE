@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: senior-be
+    runtime: python
+    plan: starter            # a persistent disk needs a paid plan
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: DB_PATH
+        value: /var/data/app.db
+      - key: SEED_DEMO
+        value: "1"
+      - key: LLM_PROVIDER
+        value: fake            # set to gemini after adding GEMINI_API_KEY
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: APP_ACCESS_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false            # the Vercel URL, e.g. https://xxx.vercel.app

@@ -9,7 +9,8 @@ FastAPI + SQLite(FTS5 trigram). AI 로직은 형제 레포 `AI/`의 `senior_ai` 
 ```bash
 cd Backend
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt        # ../AI 를 editable로 설치
+pip install -r requirements.txt
+pip install -e ../AI                   # 로컬 개발: 옆 폴더의 AI 레포를 바로 반영
 chflags -R nohidden .venv              # macOS에서 editable 설치가 안 잡힐 때만
 cp .env.example .env
 python -m app.seed                     # DB를 시연용 시드로 초기화
@@ -39,3 +40,12 @@ python -m scripts.import_docs ../test_docu/48th   # DB를 비우고 문서 전�
 - `<폴더>/<N. 행사명>/파일` 구조를 기대한다. `0.`으로 시작하는 폴더, 명단·조표·유인물 파일은 건너뛴다.
 - 파일명에 `평가`가 있으면 교훈(lesson), 아니면 회의(meeting)로 저장한다. 2024가 들어간 파일은 47대, 나머지는 48대.
 - 문서 안의 날짜 오타(연도 복붙 등)는 고치지 않는다. 원본 문서와 `data/app.db`는 git에 올리지 않는다(실명 포함).
+
+## 배포 (Render)
+
+`render.yaml`이 서비스 설정이다. 디스크(`/var/data`)가 SQLite와 올린 PDF를 보관하므로 유료 플랜이 필요하다.
+
+1. Render에서 이 레포를 Blueprint로 연결한다.
+2. 환경 변수를 입력한다: `APP_ACCESS_KEY`(접근 키), `CORS_ORIGINS`(FE 주소), 필요하면 `GEMINI_API_KEY`와 `LLM_PROVIDER=gemini`.
+3. 첫 부팅에서 디스크가 비어 있으면 가상 시드(`SEED_DEMO=1`)가 들어간다. 실제 문서는 화면의 파일 업로드로 올린다.
+- `APP_ACCESS_KEY`가 있으면 `/api/health`를 뺀 모든 API가 `X-Access-Key` 헤더를 요구한다.

@@ -107,3 +107,22 @@ def test_f3_prefers_how_to_passages_over_title_only_matches(client, cohorts):
     from app import db, service
     passages = service.search(db.connect(), "정기총회 어떻게 준비했어?")
     assert any("3주 전에 예약" in p["body"] for p in passages)
+
+
+def test_access_key_blocks_api_but_not_health_or_preflight(client, monkeypatch):
+    monkeypatch.setenv("APP_ACCESS_KEY", "s3cret")
+    assert client.get("/api/health").status_code == 200
+    assert client.get("/api/cohorts").status_code == 401
+    assert client.get("/api/cohorts", headers={"X-Access-Key": "wrong"}).status_code == 401
+    assert client.get("/api/cohorts", headers={"X-Access-Key": "s3cret"}).status_code == 200
+    assert client.options("/api/cohorts", headers={"Origin": "http://x", "Access-Control-Request-Method": "GET"}).status_code == 200
+
+
+def test_seed_on_empty_boot(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "boot.db"))
+    monkeypatch.setenv("SEED_DEMO", "1")
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    with TestClient(app) as c:
+        assert len(c.get("/api/cohorts").json()) == 2
