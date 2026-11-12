@@ -65,7 +65,8 @@ def test_f5_decision_creates_record_and_attaches_next_year(client, cohorts):
     assert any(r["type"] == "decision" for r in client.get("/api/records").json())
     cards = client.get("/api/timeline/last-year", params={"date": "2027-11-10"}).json()["cards"]
     assert cards[0]["decisions"][0]["body"] == "간식을 1.5배로 준비"
-    assert len(client.get("/api/decisions").json()) == 1
+    ds = client.get("/api/decisions").json()
+    assert len(ds) == 1 and ds[0]["event_name"] == "가을 체육대회" and ds[0]["cohort_name"] == "2026기"
 
 
 def test_decision_requires_content(client, cohorts):

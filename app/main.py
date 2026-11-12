@@ -243,4 +243,8 @@ def create_decision(b: DecisionIn, conn=Depends(db)):
 
 @app.get("/api/decisions")
 def list_decisions(conn=Depends(db)):
-    return [dict(r) for r in conn.execute("select * from decisions order by decided_on desc, id desc")]
+    return [dict(r) for r in conn.execute(
+        """select d.*, t.title as item_title, t.done_on as item_done_on, r.event_name, r.id as record_id, c.name as cohort_name
+           from decisions d join timeline_items t on t.id=d.timeline_item_id
+           join records r on r.id=t.record_id join cohorts c on c.id=d.cohort_id
+           order by d.decided_on desc, d.id desc""")]
