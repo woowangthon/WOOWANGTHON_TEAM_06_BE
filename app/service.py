@@ -1,0 +1,113 @@
+"""All DB logic. Routes stay thin; AI calls come from senior_ai."""
+from datetime import date, timedelta
+
+from senior_ai import LLMError, extract_timeline, keywords
+
+
+class NotFound(Exception):
+    pass
+
+
+def _one(conn, sql, *a):
+    r = conn.execute(sql, a).fetchone()
+    if r is None:
+        raise NotFound()
+    return dict(r)
+
+
+def require_cohort(conn, cohort_id: int):
+    _one(conn, "select id from cohorts where id=?", cohort_id)
+
+
+def add_record(conn, cohort_id, type_, title, body, event_name, occurred_on: date, extractor=extract_timeline):
+    """Insert a record; for meeting/event also extract timeline items. Returns (record, items, extraction_ok)."""
+    require_cohort(conn, cohort_id)
+    cur = conn.execute(
+        "insert into records(cohort_id,type,title,body,event_name,occurred_on) values (?,?,?,?,?,?)",
+        (cohort_id, type_, title, body, event_name, occurred_on.isoformat()))
+    rid = cur.lastrowid
+    conn.execute("insert into records_fts(rowid,title,body) values (?,?,?)", (rid, title, body))
+    items, ok = [], True
+    if type_ in ("meeting", "event"):
+        try:
+            for it in extractor(title, body, occurred_on, event_name):
+                c = conn.execute(
+                    "insert into timeline_items(record_id,cohort_id,title,done_on,category,note) values (?,?,?,?,?,?)",
+                    (rid, cohort_id, it["title"], it["done_on"], it.get("category", ""), it.get("note", "")))
+                items.append({**it, "id": c.lastrowid})
+        except LLMError:
+            ok = False
+    conn.commit()
+    return get_record(conn, rid), items, ok
+
+
+def get_record(conn, rid):
+    return _one(conn, "select * from records where id=?", rid)
+
+
+def _shift_year(d: date, years: int) -> date:
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:  # Feb 29
+        return d.replace(year=d.year + years, day=28)
+
+
+def _card(conn, r):
+    c = dict(r)
+    c["lessons"] = [dict(x) for x in conn.execute(
+        "select id, title, body, occurred_on from records where type='lesson' and cohort_id=? and event_name=? and event_name!=''",
+        (r["cohort_id"], r["event_name"]))]
+    c["decisions"] = [dict(x) for x in conn.execute(
+        "select id, body, reason, decided_on from decisions where timeline_item_id=?", (r["id"],))]
+    return c
+
+
+_CARD_SQL = """select t.id, t.title, t.done_on, t.category, t.note, t.record_id, t.cohort_id,
+  r.event_name, r.title as record_title, c.name as cohort_name
+  from timeline_items t join records r on r.id=t.record_id join cohorts c on c.id=t.cohort_id"""
+
+
+def last_year(conn, today: date, window_days: int):
+    center = _shift_year(today, -1)
+    lo, hi = center - timedelta(days=window_days), center + timedelta(days=window_days)
+    rows = conn.execute(_CARD_SQL + " where t.done_on between ? and ? order by t.done_on", (lo.isoformat(), hi.isoformat())).fetchall()
+    notice = ""
+    if not rows:  # nothing in the window: show the nearest records instead
+        rows = conn.execute(_CARD_SQL + " order by abs(julianday(t.done_on) - julianday(?)) limit 3", (center.isoformat(),)).fetchall()
+        notice = "이 시기에는 기록이 없다. 가장 가까운 시기의 기록을 보여준다." if rows else "등록된 기록이 없다."
+    return {"center": center.isoformat(), "window_days": window_days, "notice": notice, "cards": [_card(conn, r) for r in rows]}
+
+
+def search(conn, question: str, limit: int = 3):
+    score: dict[int, int] = {}
+    for k in keywords(question):
+        if len(k) >= 3:
+            ids = [r[0] for r in conn.execute("select rowid from records_fts where records_fts match ?", ('"' + k.replace('"', "") + '"',))]
+        else:
+            ids = [r[0] for r in conn.execute("select id from records where title like ? or body like ?", (f"%{k}%", f"%{k}%"))]
+        for i in ids:
+            score[i] = score.get(i, 0) + 1
+    top = sorted(score, key=lambda i: (-score[i], i))[:limit]
+    return [get_record(conn, i) for i in top]
+
+
+def add_lesson(conn, cohort_id, event_name, question, answer, today: date):
+    require_cohort(conn, cohort_id)
+    conn.execute("insert into interview_turns(cohort_id,event_name,question,answer,created_at) values (?,?,?,?,?)",
+                 (cohort_id, event_name, question, answer, today.isoformat()))
+    last = conn.execute("select max(occurred_on) from records where cohort_id=? and event_name=?", (cohort_id, event_name)).fetchone()[0]
+    rec, _, _ = add_record(conn, cohort_id, "lesson", f"{event_name} 교훈", f"{question} {answer}", event_name,
+                           date.fromisoformat(last) if last else today)
+    return rec
+
+
+def asked_questions(conn, cohort_id, event_name):
+    return [r[0] for r in conn.execute("select question from interview_turns where cohort_id=? and event_name=? order by id", (cohort_id, event_name))]
+
+
+def add_decision(conn, timeline_item_id, body, reason, decided_on: date):
+    item = _one(conn, "select t.*, r.event_name from timeline_items t join records r on r.id=t.record_id where t.id=?", timeline_item_id)
+    cur = conn.execute("insert into decisions(cohort_id,timeline_item_id,body,reason,decided_on) values (?,?,?,?,?)",
+                       (item["cohort_id"], timeline_item_id, body, reason, decided_on.isoformat()))
+    add_record(conn, item["cohort_id"], "decision", f"{item['title']} 결정", f"{body} (이유: {reason})", item["event_name"], decided_on)
+    return _one(conn, "select * from decisions where id=?", cur.lastrowid)
