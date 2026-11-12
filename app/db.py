@@ -8,7 +8,8 @@ create table if not exists cohorts (
 create table if not exists records (
   id integer primary key, cohort_id integer not null references cohorts(id),
   type text not null check (type in ('meeting','event','lesson','decision')),
-  title text not null, body text not null, event_name text not null default '', occurred_on text not null);
+  title text not null, body text not null, event_name text not null default '', occurred_on text not null,
+  pdf_path text not null default '');
 create table if not exists timeline_items (
   id integer primary key, record_id integer not null references records(id),
   cohort_id integer not null references cohorts(id),
@@ -38,4 +39,6 @@ def connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("pragma foreign_keys = on")
     conn.executescript(SCHEMA)
+    if not any(r[1] == 'pdf_path' for r in conn.execute('pragma table_info(records)')):  # older DB files
+        conn.execute("alter table records add column pdf_path text not null default ''")
     return conn

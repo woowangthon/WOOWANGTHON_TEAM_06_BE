@@ -77,3 +77,10 @@ def test_seed_makes_demo_card(client, monkeypatch):
     seed.run(db.connect())
     j = client.get("/api/timeline/last-year", params={"date": "2026-11-15"}).json()
     assert j["cards"] and any(c["lessons"] for c in j["cards"])
+
+
+def test_record_exposes_has_pdf_not_path_and_pdf_404(client, cohorts):
+    from conftest import rec
+    r = rec(client, cohorts[0]).json()["record"]
+    assert r["has_pdf"] is False and "pdf_path" not in r
+    assert client.get(f"/api/records/{r['id']}/pdf").status_code == 404

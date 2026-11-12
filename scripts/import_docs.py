@@ -23,6 +23,7 @@ DATE = re.compile(r"(\d{4})\s*[년.\-]?\s*(\d{1,2})\s*[월.\-]\s*(\d{1,2})")
 # no year in the text: fall back to the year in the file name and a month/day like "3월 24일"
 MD = re.compile(r"(\d{1,2})월\s*(\d{1,2})일")
 BIN = Path(sys.executable).parent
+DOCS = Path(db.db_path()).parent / "docs"  # original PDFs served by /api/records/{id}/pdf
 
 
 def nfc(s: str) -> str:  # macOS stores Hangul file names decomposed
@@ -69,6 +70,15 @@ def find_date(text: str, name: str):
     return None
 
 
+def sibling_pdf(p: Path):
+    """The file itself if it is a PDF, else a PDF with the same name next to it (hand-exported or shipped by the club)."""
+    key = re.sub(r"\s+", "", nfc(p.stem))
+    for q in p.parent.glob("*.pdf"):
+        if re.sub(r"\s+", "", nfc(q.stem)) == key:
+            return q
+    return None
+
+
 def pick_files(root: Path):
     seen = {}
     rank = {".hwpx": 0, ".hwp": 1, ".pdf": 2}
@@ -86,6 +96,7 @@ def pick_files(root: Path):
 def main(root: Path):
     conn = db.connect()
     wipe(conn)
+    shutil.rmtree(DOCS, ignore_errors=True)
     cohorts = {}
     for name, year in (("47대", 2024), ("48대", 2025)):
         cohorts[name] = conn.execute("insert into cohorts(name,year) values (?,?)", (name, year)).lastrowid
@@ -98,14 +109,14 @@ def main(root: Path):
             text = read_text(p)
         except Exception as e:  # noqa: BLE001 - report and move on
             print("SKIP(read)", rel, e); continue
-        docs.append({"rel": rel, "stem": stem, "text": text, "date": find_date(text, stem)})
+        docs.append({"rel": rel, "stem": stem, "text": text, "date": find_date(text, stem), "pdf": sibling_pdf(p)})
     # undated docs borrow the latest date seen in the same event folder
     latest = {}
     for d in docs:
         if d["date"]:
             k = d["rel"].parts[0]
             latest[k] = max(latest.get(k, d["date"]), d["date"])
-    n = skipped = 0
+    n = skipped = with_pdf = 0
     for d in docs:
         rel, stem, text = d["rel"], d["stem"], d["text"]
         day = d["date"] or latest.get(rel.parts[0])
@@ -114,10 +125,17 @@ def main(root: Path):
         event = re.sub(r"^\d+\.\s*|\(.*?\)", "", nfc(rel.parts[0])).strip()
         old = "2024" in stem or any("2024" in x for x in rel.parts[:-1])
         type_ = "lesson" if "평가" in stem else "meeting"
-        service.add_record(conn, cohorts["47대" if old else "48대"], type_, stem, text, event, day,
-                           extractor=lambda t, b, o, e: [{"title": t, "done_on": o.isoformat(), "category": e, "note": ""}])
+        rec, _, _ = service.add_record(conn, cohorts["47대" if old else "48대"], type_, stem, text, event, day,
+                                       extractor=lambda t, b, o, e: [{"title": t, "done_on": o.isoformat(), "category": e, "note": ""}])
+        if d["pdf"]:
+            DOCS.mkdir(parents=True, exist_ok=True)
+            dest = DOCS / f"{rec['id']}.pdf"
+            shutil.copyfile(d["pdf"], dest)
+            conn.execute("update records set pdf_path=? where id=?", (str(dest), rec["id"]))
+            conn.commit()
+            with_pdf += 1
         n += 1
-    print(f"imported {n} records, skipped {skipped}")
+    print(f"imported {n} records ({with_pdf} with original PDF), skipped {skipped}")
 
 
 if __name__ == "__main__":

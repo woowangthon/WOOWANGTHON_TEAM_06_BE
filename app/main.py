@@ -1,9 +1,10 @@
 from datetime import date
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from senior_ai import LLMError, answer_question, next_interview_question
 
@@ -27,6 +28,13 @@ async def _missing(_, exc):
 @app.exception_handler(LLMError)
 async def _ai_down(_, exc):
     return JSONResponse({"detail": f"AI 호출 실패: {exc}"}, status_code=502)
+
+
+def pub(r: dict) -> dict:
+    """Hide the server-side file path; expose only whether an original PDF exists."""
+    r = dict(r)
+    r["has_pdf"] = bool(r.pop("pdf_path", ""))
+    return r
 
 
 def db():
@@ -90,7 +98,7 @@ def create_cohort(b: CohortIn, conn=Depends(db)):
 @app.post("/api/records", status_code=201)
 def create_record(b: RecordIn, conn=Depends(db)):
     rec, items, ok = service.add_record(conn, b.cohort_id, b.type, b.title, b.body, b.event_name, b.occurred_on)
-    return {"record": rec, "timeline_items": items, "extraction": "ok" if ok else "failed"}
+    return {"record": pub(rec), "timeline_items": items, "extraction": "ok" if ok else "failed"}
 
 
 @app.get("/api/records")
@@ -100,12 +108,20 @@ def list_records(cohort_id: int | None = None, type: str | None = None, conn=Dep
         sql += " and cohort_id=?"; args.append(cohort_id)
     if type:
         sql += " and type=?"; args.append(type)
-    return [dict(r) for r in conn.execute(sql + " order by occurred_on desc, id desc", args)]
+    return [pub(dict(r)) for r in conn.execute(sql + " order by occurred_on desc, id desc", args)]
 
 
 @app.get("/api/records/{rid}")
 def read_record(rid: int, conn=Depends(db)):
-    return service.get_record(conn, rid)
+    return pub(service.get_record(conn, rid))
+
+
+@app.get("/api/records/{rid}/pdf")
+def record_pdf(rid: int, conn=Depends(db)):
+    path = service.get_record(conn, rid)["pdf_path"]
+    if not path or not Path(path).is_file():
+        raise service.NotFound()
+    return FileResponse(path, media_type="application/pdf", headers={"Content-Disposition": "inline"})
 
 
 @app.get("/api/timeline/last-year")
@@ -127,7 +143,7 @@ def interview_next(b: InterviewNextIn, conn=Depends(db)):
 
 @app.post("/api/interviews/answer", status_code=201)
 def interview_answer(b: InterviewAnswerIn, conn=Depends(db)):
-    return service.add_lesson(conn, b.cohort_id, b.event_name, b.question, b.answer, date.today())
+    return pub(service.add_lesson(conn, b.cohort_id, b.event_name, b.question, b.answer, date.today()))
 
 
 @app.post("/api/decisions", status_code=201)
