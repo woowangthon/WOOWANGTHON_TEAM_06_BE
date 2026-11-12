@@ -5,6 +5,7 @@ Evaluation docs (파일명에 '평가') become `lesson` records, the rest `meeti
 One timeline item per meeting record (title = file name, date = date in the text).
 """
 import html
+import json
 import re
 import shutil
 import subprocess
@@ -58,6 +59,9 @@ def main(root: Path):
     for name, year in (("47대", 2024), ("48대", 2025)):
         cohorts[name] = conn.execute("insert into cohorts(name,year) values (?,?)", (name, year)).lastrowid
     conn.commit()
+    fixes = {}
+    if (root / "date_fixes.json").exists():  # {"문서 제목": "YYYY-MM-DD"} for typos in the originals; stays next to the (untracked) documents
+        fixes = {nfc(k): date.fromisoformat(v) for k, v in json.loads((root / "date_fixes.json").read_text(encoding="utf-8")).items()}
     docs = []
     for p in pick_files(root):
         rel = p.relative_to(root)
@@ -66,7 +70,7 @@ def main(root: Path):
             text = read_text(p)
         except Exception as e:  # noqa: BLE001 - report and move on
             print("SKIP(read)", rel, e); continue
-        docs.append({"rel": rel, "stem": stem, "text": text, "date": find_date(text, stem), "pdf": sibling_pdf(p)})
+        docs.append({"rel": rel, "stem": stem, "text": text, "date": fixes.get(stem) or find_date(text, stem), "pdf": sibling_pdf(p)})
     # undated docs borrow the latest date seen in the same event folder
     latest = {}
     for d in docs:
