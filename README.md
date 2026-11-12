@@ -24,3 +24,14 @@ uvicorn app.main:app --port 8000
 ## 오류 코드
 
 입력 오류 400, 없는 자료 404, AI 호출 실패 502.
+
+## 실제 문서 가져오기 (hwp/hwpx/pdf)
+
+```bash
+pip install -r requirements-import.txt
+python -m scripts.import_docs ../test_docu/48th   # DB를 비우고 문서 전체를 가져온다
+```
+
+- `<폴더>/<N. 행사명>/파일` 구조를 기대한다. `0.`으로 시작하는 폴더, 명단·조표·유인물 파일은 건너뛴다.
+- 파일명에 `평가`가 있으면 교훈(lesson), 아니면 회의(meeting)로 저장한다. 2024가 들어간 파일은 47대, 나머지는 48대.
+- 문서 안의 날짜 오타(연도 복붙 등)는 고치지 않는다. 원본 문서와 `data/app.db`는 git에 올리지 않는다(실명 포함).

@@ -11,12 +11,16 @@ from . import db, service
 SEED = Path(__file__).resolve().parent.parent / "seed" / "records.json"
 
 
-def run(conn: sqlite3.Connection | None = None) -> None:
-    conn = conn or db.connect()
+def wipe(conn: sqlite3.Connection) -> None:
     for t in ("decisions", "interview_turns", "timeline_items", "records", "cohorts"):
         conn.execute(f"delete from {t}")
     conn.execute("delete from records_fts")
     conn.commit()
+
+
+def run(conn: sqlite3.Connection | None = None) -> None:
+    conn = conn or db.connect()
+    wipe(conn)
     data = json.loads(SEED.read_text(encoding="utf-8"))
     ids = {}
     for c in data["cohorts"]:
