@@ -15,59 +15,16 @@ from datetime import date
 from pathlib import Path
 
 from app import db, service
+from app.extract import find_date, read_text
 from app.seed import wipe
 
 SKIP_NAMES = ("명단", "조표", "유인물", "복사본")
-# "2025년 4월 18일", "2025 5월 19일", "2025 7.24", "2025.3.24"
-DATE = re.compile(r"(\d{4})\s*[년.\-]?\s*(\d{1,2})\s*[월.\-]\s*(\d{1,2})")
-# no year in the text: fall back to the year in the file name and a month/day like "3월 24일"
-MD = re.compile(r"(\d{1,2})월\s*(\d{1,2})일")
 BIN = Path(sys.executable).parent
 DOCS = Path(db.db_path()).parent / "docs"  # original PDFs served by /api/records/{id}/pdf
 
 
 def nfc(s: str) -> str:  # macOS stores Hangul file names decomposed
     return unicodedata.normalize("NFC", s)
-
-
-def read_hwpx(p: Path) -> str:
-    out = []
-    with zipfile.ZipFile(p) as z:
-        for n in sorted(z.namelist()):
-            if n.startswith("Contents/section") and n.endswith(".xml"):
-                for para in re.findall(r"<hp:p[ >].*?</hp:p>", z.read(n).decode("utf-8", "ignore"), flags=re.S):
-                    t = html.unescape(re.sub(r"<[^>]+>", "", "".join(re.findall(r"<hp:t>(.*?)</hp:t>", para, flags=re.S)))).strip()
-                    if t:
-                        out.append(t)
-    return "\n".join(out)
-
-
-def run_tool(name: str, p: Path) -> str:
-    exe = BIN / name if (BIN / name).exists() else shutil.which(name)
-    return subprocess.run([str(exe), str(p)], capture_output=True, text=True, check=True).stdout
-
-
-def read_text(p: Path) -> str:
-    ext = p.suffix.lower()
-    t = read_hwpx(p) if ext == ".hwpx" else run_tool("hwp5txt", p) if ext == ".hwp" else run_tool("markitdown", p)
-    return re.sub(r"<표>|[ \t]+\n", "", t).strip()
-
-
-def find_date(text: str, name: str):
-    for src in (text[:600], name, text):
-        for m in DATE.finditer(src):
-            try:
-                return date(int(m[1]), int(m[2]), int(m[3]))
-            except ValueError:
-                continue
-    year = re.search(r"(20\d{2})", name)
-    m = MD.search(text) or MD.search(name)
-    if year and m:
-        try:
-            return date(int(year[1]), int(m[1]), int(m[2]))
-        except ValueError:
-            pass
-    return None
 
 
 def sibling_pdf(p: Path):

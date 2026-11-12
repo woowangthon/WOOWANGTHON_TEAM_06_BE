@@ -2,4 +2,7 @@ fastapi
 uvicorn
 httpx
 pytest
+python-multipart
+pyhwp
+markitdown[pdf]
 -e ../AI

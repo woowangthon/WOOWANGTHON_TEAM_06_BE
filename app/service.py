@@ -3,6 +3,8 @@ from datetime import date, timedelta
 
 from senior_ai import LLMError, extract_timeline, keywords
 
+from .db import add_chunks
+
 
 class NotFound(Exception):
     pass
@@ -27,6 +29,7 @@ def add_record(conn, cohort_id, type_, title, body, event_name, occurred_on: dat
         (cohort_id, type_, title, body, event_name, occurred_on.isoformat()))
     rid = cur.lastrowid
     conn.execute("insert into records_fts(rowid,title,body) values (?,?,?)", (rid, title, body))
+    add_chunks(conn, rid, body)
     items, ok = [], True
     if type_ in ("meeting", "event"):
         try:
@@ -78,17 +81,36 @@ def last_year(conn, today: date, window_days: int):
     return {"center": center.isoformat(), "window_days": window_days, "notice": notice, "cards": [_card(conn, r) for r in rows]}
 
 
-def search(conn, question: str, limit: int = 3):
-    score: dict[int, int] = {}
-    for k in keywords(question):
+def search(conn, question: str, limit: int = 10, per_record: int = 3):
+    """Passage retrieval. A passage scores the length of every keyword it contains; a keyword that appears in the
+    record's title or event name lifts all of that record's passages (e.g. '정기총회' finds the whole 총회 documents)."""
+    kws = keywords(question)
+    if not kws:
+        return []
+    cand: set[int] = set()
+    for k in kws:
         if len(k) >= 3:
-            ids = [r[0] for r in conn.execute("select rowid from records_fts where records_fts match ?", ('"' + k.replace('"', "") + '"',))]
+            cand |= {r[0] for r in conn.execute("select rowid from chunks_fts where chunks_fts match ?", ('"' + k.replace('"', "") + '"',))}
         else:
-            ids = [r[0] for r in conn.execute("select id from records where title like ? or body like ?", (f"%{k}%", f"%{k}%"))]
-        for i in ids:
-            score[i] = score.get(i, 0) + 1
-    top = sorted(score, key=lambda i: (-score[i], i))[:limit]
-    return [get_record(conn, i) for i in top]
+            cand |= {r[0] for r in conn.execute("select id from chunks where text like ?", (f"%{k}%",))}
+        cand |= {r[0] for r in conn.execute(
+            "select c.id from chunks c join records r on r.id=c.record_id where r.title like ? or r.event_name like ?", (f"%{k}%", f"%{k}%"))}
+    rows = []
+    for cid in cand:
+        c = conn.execute("select c.id, c.record_id, c.text, r.title, r.event_name, r.occurred_on from chunks c join records r on r.id=c.record_id where c.id=?", (cid,)).fetchone()
+        head = c["title"] + " " + c["event_name"]
+        score = sum(len(k) * ((k in c["text"]) + (k in head)) for k in kws)
+        rows.append((score, c))
+    rows.sort(key=lambda x: (-x[0], x[1]["record_id"], x[1]["id"]))
+    out, used = [], {}
+    for score, c in rows:
+        if score <= 0 or used.get(c["record_id"], 0) >= per_record:
+            continue
+        used[c["record_id"]] = used.get(c["record_id"], 0) + 1
+        out.append({"id": c["record_id"], "title": c["title"], "body": c["text"], "occurred_on": c["occurred_on"]})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def add_lesson(conn, cohort_id, event_name, question, answer, today: date):

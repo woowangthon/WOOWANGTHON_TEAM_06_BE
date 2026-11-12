@@ -12,9 +12,10 @@ SEED = Path(__file__).resolve().parent.parent / "seed" / "records.json"
 
 
 def wipe(conn: sqlite3.Connection) -> None:
-    for t in ("decisions", "interview_turns", "timeline_items", "records", "cohorts"):
+    for t in ("decisions", "interview_turns", "timeline_items", "chunks", "records", "cohorts"):
         conn.execute(f"delete from {t}")
     conn.execute("delete from records_fts")
+    conn.execute("delete from chunks_fts")
     conn.commit()
 
 

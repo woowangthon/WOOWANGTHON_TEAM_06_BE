@@ -84,3 +84,26 @@ def test_record_exposes_has_pdf_not_path_and_pdf_404(client, cohorts):
     r = rec(client, cohorts[0]).json()["record"]
     assert r["has_pdf"] is False and "pdf_path" not in r
     assert client.get(f"/api/records/{r['id']}/pdf").status_code == 404
+
+
+def test_upload_txt_reads_date_from_text(client, cohorts):
+    body = "정기총회 회의록\n2025년 11월 27일 18시 회의 시작\n회의장은 3주 전에 예약했다.".encode()
+    r = client.post("/api/records/upload", data={"cohort_id": cohorts[0], "type": "meeting", "event_name": "정기총회"},
+                    files={"file": ("총회.txt", body, "text/plain")})
+    assert r.status_code == 201 and r.json()["record"]["occurred_on"] == "2025-11-27"
+    assert client.post("/api/ask", json={"question": "정기총회 회의장은 어떻게 했어?"}).json()["sources"]
+
+
+def test_upload_rejects_unknown_type_and_missing_date(client, cohorts):
+    bad = client.post("/api/records/upload", data={"cohort_id": cohorts[0]}, files={"file": ("a.exe", b"x", "application/octet-stream")})
+    assert bad.status_code == 400
+    nodate = client.post("/api/records/upload", data={"cohort_id": cohorts[0]}, files={"file": ("a.txt", "날짜 없는 글".encode(), "text/plain")})
+    assert nodate.status_code == 400 and "날짜" in nodate.json()["detail"]
+
+
+def test_f3_prefers_how_to_passages_over_title_only_matches(client, cohorts):
+    rec(client, cohorts[0], title="정기총회 회의지", event_name="정기총회", occurred_on="2025-11-27",
+        body="2025-11-27 정기총회 안건을 정했다.\n" + "관계없는 이야기. " * 80 + "\n회의장은 3주 전에 예약하고 안건지는 하루 전에 배포했다.")
+    from app import db, service
+    passages = service.search(db.connect(), "정기총회 어떻게 준비했어?")
+    assert any("3주 전에 예약" in p["body"] for p in passages)

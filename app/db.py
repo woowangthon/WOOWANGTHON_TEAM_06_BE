@@ -24,6 +24,10 @@ create table if not exists decisions (
 create index if not exists idx_items_done on timeline_items(done_on);
 create index if not exists idx_records_event on records(event_name, type);
 create virtual table if not exists records_fts using fts5(title, body, tokenize='trigram');
+create table if not exists chunks (
+  id integer primary key, record_id integer not null references records(id), idx integer not null, text text not null);
+create index if not exists idx_chunks_record on chunks(record_id);
+create virtual table if not exists chunks_fts using fts5(text, tokenize='trigram');
 """
 
 
@@ -41,4 +45,21 @@ def connect() -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     if not any(r[1] == 'pdf_path' for r in conn.execute('pragma table_info(records)')):  # older DB files
         conn.execute("alter table records add column pdf_path text not null default ''")
+    backfill_chunks(conn)
     return conn
+
+
+def add_chunks(conn: sqlite3.Connection, record_id: int, body: str) -> None:
+    from .chunks import chunk_text
+    for i, text in enumerate(chunk_text(body)):
+        cid = conn.execute("insert into chunks(record_id,idx,text) values (?,?,?)", (record_id, i, text)).lastrowid
+        conn.execute("insert into chunks_fts(rowid,text) values (?,?)", (cid, text))
+
+
+def backfill_chunks(conn: sqlite3.Connection) -> None:
+    """DB files created before passages existed: build them once."""
+    if conn.execute("select 1 from chunks limit 1").fetchone() or not conn.execute("select 1 from records limit 1").fetchone():
+        return
+    for r in conn.execute("select id, body from records").fetchall():
+        add_chunks(conn, r["id"], r["body"])
+    conn.commit()

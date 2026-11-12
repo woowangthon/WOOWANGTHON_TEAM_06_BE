@@ -1,7 +1,10 @@
 from datetime import date
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Query
+import shutil
+import tempfile
+
+from fastapi import Depends, FastAPI, File, Form, Query, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -9,7 +12,8 @@ from pydantic import BaseModel, Field
 from senior_ai import LLMError, answer_question, next_interview_question
 
 from . import service
-from .db import connect
+from .db import connect, db_path
+from .extract import SUPPORTED, ExtractError, find_date, read_text
 
 app = FastAPI(title="졸업하지 않는 선배")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -98,6 +102,59 @@ def create_cohort(b: CohortIn, conn=Depends(db)):
 @app.post("/api/records", status_code=201)
 def create_record(b: RecordIn, conn=Depends(db)):
     rec, items, ok = service.add_record(conn, b.cohort_id, b.type, b.title, b.body, b.event_name, b.occurred_on)
+    return {"record": pub(rec), "timeline_items": items, "extraction": "ok" if ok else "failed"}
+
+
+MAX_UPLOAD = 20 * 1024 * 1024
+
+
+class Bad(Exception):
+    pass
+
+
+@app.exception_handler(Bad)
+async def _bad(_, exc):
+    return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+@app.post("/api/records/upload", status_code=201)
+def upload_record(file: UploadFile = File(...), cohort_id: int = Form(...), type: str = Form("meeting"),
+                  event_name: str = Form(""), occurred_on: date | None = Form(None), title: str = Form(""),
+                  conn=Depends(db)):
+    """Register a document from a file. The date comes from the form, else from the document text."""
+    name = file.filename or "문서"
+    ext = Path(name).suffix.lower()
+    if ext not in SUPPORTED:
+        raise Bad(f"지원하지 않는 형식이다. {', '.join(sorted(SUPPORTED))} 파일을 올려 달라")
+    if type not in ("meeting", "event", "lesson"):
+        raise Bad("종류는 meeting, event, lesson 중 하나여야 한다")
+    service.require_cohort(conn, cohort_id)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / f"upload{ext}"
+        size = 0
+        with path.open("wb") as f:
+            while chunk := file.file.read(1 << 20):
+                size += len(chunk)
+                if size > MAX_UPLOAD:
+                    raise Bad("파일이 20MB를 넘는다")
+                f.write(chunk)
+        try:
+            text = read_text(path)
+        except ExtractError as e:
+            raise Bad(str(e))
+        if not text:
+            raise Bad("문서에서 글자를 찾지 못했다. 스캔본이면 글자가 있는 파일로 올려 달라")
+        day = occurred_on or find_date(text, Path(name).stem)
+        if not day:
+            raise Bad("문서에서 날짜를 찾지 못했다. 날짜를 직접 입력해 달라")
+        rec, items, ok = service.add_record(conn, cohort_id, type, title.strip() or Path(name).stem, text, event_name, day)
+        if ext == ".pdf":  # keep the original so the overlay can show it
+            dest = Path(db_path()).parent / "docs" / f"{rec['id']}.pdf"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, dest)
+            conn.execute("update records set pdf_path=? where id=?", (str(dest), rec["id"]))
+            conn.commit()
+            rec = service.get_record(conn, rec["id"])
     return {"record": pub(rec), "timeline_items": items, "extraction": "ok" if ok else "failed"}
 
 

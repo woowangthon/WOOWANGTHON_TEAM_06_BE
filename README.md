@@ -16,7 +16,7 @@ python -m app.seed                     # DB를 시연용 시드로 초기화
 uvicorn app.main:app --port 8000
 ```
 
-- `LLM_PROVIDER=fake`(기본)는 키가 필요 없다. Gemini는 `LLM_PROVIDER=gemini` + `GEMINI_API_KEY`.
+- `LLM_PROVIDER=fake`(기본)는 키가 필요 없다. 실제 답변은 `LLM_PROVIDER=gemini` + `GEMINI_API_KEY`(+ `GEMINI_MODEL`)로 켠다. '선배에게 묻기'는 문서를 약 500자 구간으로 나눠 관련 구간을 찾은 뒤 모델이 그 구간만으로 답하고, 인용 구절이 원문에 있는지 서버가 다시 확인한다.
 - 시드 재적재: `python -m app.seed` (기존 데이터는 지워진다).
 - 테스트: `pytest` (항상 fake LLM, 네트워크 없음).
 - API 문서: http://localhost:8000/docs
@@ -25,10 +25,14 @@ uvicorn app.main:app --port 8000
 
 입력 오류 400, 없는 자료 404, AI 호출 실패 502.
 
-## 실제 문서 가져오기 (hwp/hwpx/pdf)
+## 문서 올리기와 가져오기
+
+- 화면의 기록 탭에서 파일(PDF, hwp, hwpx, docx, txt)을 올릴 수 있다. API는 `POST /api/records/upload`(multipart, 최대 20MB).
+- PDF는 원본이 저장되어 원문 팝업에서 그대로 보인다. hwp·hwpx는 글자만 읽어 텍스트로 보여준다.
+
+한꺼번에 가져오기:
 
 ```bash
-pip install -r requirements-import.txt
 python -m scripts.import_docs ../test_docu/48th   # DB를 비우고 문서 전체를 가져온다
 ```
 
