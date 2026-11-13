@@ -52,14 +52,22 @@ def pick_files(root: Path):
     return sorted(seen.values())
 
 
-def main(root: Path):
+def main(root: Path, append: bool = False, cohort: str | None = None, event: str | None = None):
+    """Default: wipe the DB and import the club archive (47대/48대). --append --cohort "이름:연도" [--event 행사명] adds
+    another source (e.g. public minutes) to the existing DB; every file of that folder goes to that cohort."""
     conn = db.connect()
-    wipe(conn)
-    shutil.rmtree(DOCS, ignore_errors=True)
     cohorts = {}
-    for name, year in (("47대", 2024), ("48대", 2025)):
-        cohorts[name] = conn.execute("insert into cohorts(name,year) values (?,?)", (name, year)).lastrowid
-    conn.commit()
+    if append:
+        name, _, year = (cohort or root.name).partition(":")
+        row = conn.execute("select id from cohorts where name=?", (name,)).fetchone()
+        cohorts["*"] = row[0] if row else conn.execute("insert into cohorts(name,year) values (?,?)", (name, int(year or 0))).lastrowid
+        conn.commit()
+    else:
+        wipe(conn)
+        shutil.rmtree(DOCS, ignore_errors=True)
+        for name, year in (("47대", 2024), ("48대", 2025)):
+            cohorts[name] = conn.execute("insert into cohorts(name,year) values (?,?)", (name, year)).lastrowid
+        conn.commit()
     fixes = {}
     if (root / "date_fixes.json").exists():  # {"문서 제목": "YYYY-MM-DD"} for typos in the originals; stays next to the (untracked) documents
         fixes = {nfc(k): date.fromisoformat(v) for k, v in json.loads((root / "date_fixes.json").read_text(encoding="utf-8")).items()}
@@ -86,10 +94,10 @@ def main(root: Path):
         day = d["date"] or latest.get(rel.parts[0])
         if not text or not day:
             print("SKIP(no text/date)", rel); skipped += 1; continue
-        event = re.sub(r"^\d+\.\s*|\(.*?\)", "", nfc(rel.parts[0])).strip()
+        ev = event or (root.name if append else re.sub(r"^\d+\.\s*|\(.*?\)", "", nfc(rel.parts[0])).strip())
         old = "2024" in stem or any("2024" in x for x in rel.parts[:-1])
         type_ = "lesson" if "평가" in stem else "meeting"
-        rec, _, _ = service.add_record(conn, cohorts["47대" if old else "48대"], type_, stem, text, event, day,
+        rec, _, _ = service.add_record(conn, cohorts["*"] if append else cohorts["47대" if old else "48대"], type_, stem, text, ev, day,
                                        extractor=lambda t, b, o, e: [{"title": t, "done_on": o.isoformat(), "category": e, "note": ""}])
         DOCS.mkdir(parents=True, exist_ok=True)
         dest = DOCS / f"{rec['id']}.pdf"
@@ -106,4 +114,11 @@ def main(root: Path):
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1]))
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("root", type=Path)
+    ap.add_argument("--append", action="store_true")
+    ap.add_argument("--cohort", help='"이름:연도" (with --append)')
+    ap.add_argument("--event", help="event name for every file (with --append; default: folder name)")
+    a = ap.parse_args()
+    main(a.root, a.append, a.cohort, a.event)

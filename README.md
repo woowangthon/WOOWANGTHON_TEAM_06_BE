@@ -50,3 +50,5 @@ python -m scripts.import_docs ../test_docu/48th   # DB를 비우고 문서 전�
 2. 환경 변수를 입력한다: `APP_ACCESS_KEY`(접근 키), `CORS_ORIGINS`(FE 주소), 필요하면 `GEMINI_API_KEY`와 `LLM_PROVIDER=gemini`.
 3. 첫 부팅에서 디스크가 비어 있으면 가상 시드(`SEED_DEMO=1`)가 들어간다. 실제 문서는 화면의 파일 업로드로 올린다.
 - `APP_ACCESS_KEY`가 있으면 `/api/health`를 뺀 모든 API가 `X-Access-Key` 헤더를 요구한다.
+
+- 다른 기관의 공개 자료 추가: `python -m scripts.import_docs <폴더> --append --cohort "이름:연도" --event "행사명"` (기존 데이터를 지우지 않고 해당 폴더의 모든 파일을 그 기수·행사로 추가). 폴더에 `date_fixes.json`이 있으면 날짜를 보정한다.
