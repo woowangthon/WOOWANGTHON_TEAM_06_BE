@@ -180,3 +180,47 @@ def delete_record(conn, rid):
     conn.execute("delete from records where id=?", (rid,))
     conn.commit()
     return rec
+
+
+REL_LABEL = {"has_event": "진행", "has_record": "기록", "has_lesson": "교훈", "has_decision": "결정", "next_term": "다음 기수"}
+
+
+def graph(conn):
+    """Ontology view of the archive: cohort -> event -> (record | lesson | decision), plus the same event across terms."""
+    nodes, edges = [], []
+    cohorts = [dict(r) for r in conn.execute("select id, name, year from cohorts order by year")]
+    for c in cohorts:
+        nodes.append({"id": f"c{c['id']}", "type": "cohort", "label": c["name"], "year": c["year"]})
+    events = conn.execute(
+        "select cohort_id, event_name, count(*) n from records where event_name != '' group by cohort_id, event_name").fetchall()
+    for e in events:
+        eid = f"e{e['cohort_id']}|{e['event_name']}"
+        nodes.append({"id": eid, "type": "event", "label": e["event_name"], "count": e["n"], "cohort_id": e["cohort_id"]})
+        edges.append({"source": f"c{e['cohort_id']}", "target": eid, "rel": "has_event"})
+    by_name: dict[str, list[dict]] = {}
+    year = {c["id"]: c["year"] for c in cohorts}
+    for e in events:
+        by_name.setdefault(e["event_name"], []).append(e)
+    for name, es in by_name.items():
+        es.sort(key=lambda x: year.get(x["cohort_id"], 0))
+        for a, b in zip(es, es[1:]):
+            edges.append({"source": f"e{a['cohort_id']}|{name}", "target": f"e{b['cohort_id']}|{name}", "rel": "next_term"})
+    for r in conn.execute("select id, cohort_id, type, title, event_name, occurred_on, pdf_path != '' as has_pdf from records"):
+        nid = f"r{r['id']}"
+        kind = "event_doc" if r["type"] == "event" else r["type"]  # "event" is the class of event nodes
+        nodes.append({"id": nid, "type": kind, "label": r["title"], "record_id": r["id"], "occurred_on": r["occurred_on"],
+                      "event_name": r["event_name"], "has_pdf": bool(r["has_pdf"])})
+        parent = f"e{r['cohort_id']}|{r['event_name']}" if r["event_name"] else f"c{r['cohort_id']}"
+        edges.append({"source": parent, "target": nid, "rel": {"lesson": "has_lesson", "decision": "has_decision"}.get(kind, "has_record")})
+    return {"nodes": nodes, "edges": edges, "relations": REL_LABEL}
+
+
+def stats(conn):
+    one = lambda sql: conn.execute(sql).fetchone()[0]
+    return {
+        "records": one("select count(*) from records"), "passages": one("select count(*) from chunks"),
+        "events": one("select count(*) from (select distinct cohort_id, event_name from records where event_name != '')"),
+        "cohorts": one("select count(*) from cohorts"), "lessons": one("select count(*) from records where type='lesson'"),
+        "decisions": one("select count(*) from decisions"), "with_original": one("select count(*) from records where pdf_path != ''"),
+        "characters": one("select coalesce(sum(length(body)), 0) from records"),
+    }

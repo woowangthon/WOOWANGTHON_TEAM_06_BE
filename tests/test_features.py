@@ -148,3 +148,25 @@ def test_delete_removes_record_items_and_decisions(client, cohorts):
     assert client.get("/api/decisions").json() == []
     assert client.delete(f"/api/records/{rid}").status_code == 404
     assert client.get("/api/timeline/last-year", params={"date": "2027-11-04", "window_days": 1}).json()["cards"] == []
+
+
+def test_graph_links_cohort_event_record_and_next_term(client, cohorts):
+    rec(client, cohorts[0], event_name="LT", occurred_on="2025-12-01", body="2025-12-01 LT를 했다.")
+    rec(client, cohorts[1], event_name="LT", occurred_on="2026-12-01", body="2026-12-01 LT를 했다.")
+    rec(client, cohorts[0], type="lesson", event_name="LT", title="LT 교훈", body="다음엔 일찍 시작한다.")
+    g = client.get("/api/graph").json()
+    kinds = {n["type"] for n in g["nodes"]}
+    assert {"cohort", "event", "meeting", "lesson"} <= kinds
+    rels = {e["rel"] for e in g["edges"]}
+    assert {"has_event", "has_record", "has_lesson", "next_term"} <= rels
+    ids = {n["id"] for n in g["nodes"]}
+    assert all(e["source"] in ids and e["target"] in ids for e in g["edges"])
+
+
+def test_stats_and_ask_report_retrieval(client, cohorts):
+    r = rec(client, cohorts[0]).json()
+    assert r["passages"] >= 1
+    st = client.get("/api/stats").json()
+    assert st["records"] == 1 and st["passages"] >= 1 and st["cohorts"] == 2
+    out = client.post("/api/ask", json={"question": "체육대회는 어땠나요?"}).json()
+    assert out["retrieved"] >= 1

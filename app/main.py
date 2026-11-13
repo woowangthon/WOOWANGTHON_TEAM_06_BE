@@ -143,7 +143,8 @@ def create_cohort(b: CohortIn, conn=Depends(db)):
 @app.post("/api/records", status_code=201)
 def create_record(b: RecordIn, conn=Depends(db)):
     rec, items, ok = service.add_record(conn, b.cohort_id, b.type, b.title, b.body, b.event_name, b.occurred_on)
-    return {"record": pub(rec), "timeline_items": items, "extraction": "ok" if ok else "failed"}
+    return {"record": pub(rec), "timeline_items": items, "extraction": "ok" if ok else "failed",
+            "passages": conn.execute("select count(*) from chunks where record_id=?", (rec["id"],)).fetchone()[0]}
 
 
 MAX_UPLOAD = 20 * 1024 * 1024
@@ -199,7 +200,8 @@ def upload_record(file: UploadFile = File(...), cohort_id: int = Form(...), type
             conn.execute("update records set pdf_path=? where id=?", (str(dest), rec["id"]))
             conn.commit()
             rec = service.get_record(conn, rec["id"])
-    return {"record": pub(rec), "timeline_items": items, "extraction": "ok" if ok else "failed"}
+    return {"record": pub(rec), "timeline_items": items, "extraction": "ok" if ok else "failed",
+            "passages": conn.execute("select count(*) from chunks where record_id=?", (rec["id"],)).fetchone()[0]}
 
 
 @app.get("/api/records")
@@ -243,9 +245,20 @@ def timeline_last_year(date: date = Query(...), window_days: int = Query(14, ge=
     return service.last_year(conn, date, window_days)
 
 
+@app.get("/api/graph")
+def knowledge_graph(conn=Depends(db)):
+    return service.graph(conn)
+
+
+@app.get("/api/stats")
+def archive_stats(conn=Depends(db)):
+    return service.stats(conn)
+
+
 @app.post("/api/ask")
 def ask(b: AskIn, conn=Depends(db)):
-    return answer_question(b.question, service.search(conn, b.question))
+    passages = service.search(conn, b.question)
+    return {**answer_question(b.question, passages), "retrieved": len(passages)}
 
 
 @app.post("/api/interviews/next")
