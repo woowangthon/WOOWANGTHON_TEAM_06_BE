@@ -29,7 +29,7 @@ uvicorn app.main:app --port 8000
 ## 문서 올리기와 가져오기
 
 - 화면의 기록 탭에서 파일(PDF, hwp, hwpx, docx, txt)을 올릴 수 있다. API는 `POST /api/records/upload`(multipart, 최대 20MB).
-- PDF는 원본이 저장되어 원문 팝업에서 그대로 보인다. hwp·hwpx는 글자만 읽어 텍스트로 보여준다.
+- PDF는 원본이 저장되어 원문 팝업에서 그대로 보인다. hwp·hwpx·docx는 LibreOffice가 있으면 PDF로 바꿔 보여주고(hwp는 pyhwp, hwpx는 직접 변환), 없으면 텍스트로만 보여준다.
 
 한꺼번에 가져오기:
 

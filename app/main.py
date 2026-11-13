@@ -17,6 +17,7 @@ from senior_ai import LLMError, answer_question, next_interview_question
 from . import service
 from .db import connect, db_path
 from .extract import SUPPORTED, ExtractError, find_date, read_text
+from .to_pdf import to_pdf
 
 @asynccontextmanager
 async def lifespan(_):
@@ -188,10 +189,13 @@ def upload_record(file: UploadFile = File(...), cohort_id: int = Form(...), type
         if not day:
             raise Bad("문서에서 날짜를 찾지 못했다. 날짜를 직접 입력해 달라")
         rec, items, ok = service.add_record(conn, cohort_id, type, title.strip() or Path(name).stem, text, event_name, day)
-        if ext == ".pdf":  # keep the original so the overlay can show it
-            dest = Path(db_path()).parent / "docs" / f"{rec['id']}.pdf"
-            dest.parent.mkdir(parents=True, exist_ok=True)
+        dest = Path(db_path()).parent / "docs" / f"{rec['id']}.pdf"  # keep the original (or a PDF rendering of it) for the overlay
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if ext == ".pdf":
             shutil.copyfile(path, dest)
+        else:
+            to_pdf(path, dest)
+        if dest.exists():
             conn.execute("update records set pdf_path=? where id=?", (str(dest), rec["id"]))
             conn.commit()
             rec = service.get_record(conn, rec["id"])

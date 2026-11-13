@@ -17,6 +17,7 @@ from pathlib import Path
 
 from app import db, service
 from app.extract import find_date, read_text
+from app.to_pdf import to_pdf, soffice
 from app.seed import wipe
 
 SKIP_NAMES = ("명단", "조표", "유인물", "복사본")
@@ -70,14 +71,16 @@ def main(root: Path):
             text = read_text(p)
         except Exception as e:  # noqa: BLE001 - report and move on
             print("SKIP(read)", rel, e); continue
-        docs.append({"rel": rel, "stem": stem, "text": text, "date": fixes.get(stem) or find_date(text, stem), "pdf": sibling_pdf(p)})
+        docs.append({"rel": rel, "stem": stem, "text": text, "date": fixes.get(stem) or find_date(text, stem), "pdf": sibling_pdf(p), "src": p})
     # undated docs borrow the latest date seen in the same event folder
     latest = {}
     for d in docs:
         if d["date"]:
             k = d["rel"].parts[0]
             latest[k] = max(latest.get(k, d["date"]), d["date"])
-    n = skipped = with_pdf = 0
+    n = skipped = with_pdf = converted = 0
+    if not soffice():
+        print("LibreOffice not found: hwp/hwpx stay text-only")
     for d in docs:
         rel, stem, text = d["rel"], d["stem"], d["text"]
         day = d["date"] or latest.get(rel.parts[0])
@@ -88,15 +91,18 @@ def main(root: Path):
         type_ = "lesson" if "평가" in stem else "meeting"
         rec, _, _ = service.add_record(conn, cohorts["47대" if old else "48대"], type_, stem, text, event, day,
                                        extractor=lambda t, b, o, e: [{"title": t, "done_on": o.isoformat(), "category": e, "note": ""}])
+        DOCS.mkdir(parents=True, exist_ok=True)
+        dest = DOCS / f"{rec['id']}.pdf"
         if d["pdf"]:
-            DOCS.mkdir(parents=True, exist_ok=True)
-            dest = DOCS / f"{rec['id']}.pdf"
             shutil.copyfile(d["pdf"], dest)
+        elif d["src"].suffix.lower() in (".hwp", ".hwpx", ".docx") and to_pdf(d["src"], dest):
+            converted += 1
+        if dest.exists():
             conn.execute("update records set pdf_path=? where id=?", (str(dest), rec["id"]))
             conn.commit()
             with_pdf += 1
         n += 1
-    print(f"imported {n} records ({with_pdf} with original PDF), skipped {skipped}")
+    print(f"imported {n} records ({with_pdf} with original PDF, {converted} converted to PDF), skipped {skipped}")
 
 
 if __name__ == "__main__":
