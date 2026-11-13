@@ -45,6 +45,31 @@ def red(t: str) -> str:
     return "{{r:" + t + "}}" if t.strip() else t
 
 
+def clean_md_tables(text: str) -> str:
+    """PDF converters leave tables full of empty columns and blank header rows; drop them so the table reads cleanly."""
+    lines, out, i = text.split("\n"), [], 0
+    split = lambda l: [c.strip() for c in l.strip().strip("|").split("|")]
+    while i < len(lines):
+        if not lines[i].startswith("|"):
+            out.append(lines[i]); i += 1
+            continue
+        j = i
+        while j < len(lines) and lines[j].startswith("|"):
+            j += 1
+        rows = [split(l) for l in lines[i:j] if not re.fullmatch(r"\|[\s:\-|]+\|?", l)]
+        w = max((len(r) for r in rows), default=0)
+        rows = [r + [""] * (w - len(r)) for r in rows]
+        keep = [c for c in range(w) if any(r[c] for r in rows)]
+        rows = [[r[c] for c in keep] for r in rows]
+        rows = [r for r in rows if any(r)]
+        if len(rows) >= 2 and len(keep) >= 2:
+            out.append(md_table(rows))
+        else:
+            out.extend(" ".join(c for c in r if c) for r in rows)
+        i = j
+    return "\n".join(out)
+
+
 def _hwpx(p: Path) -> str:
     import xml.etree.ElementTree as ET
     hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
@@ -228,7 +253,8 @@ def read_text(p: Path) -> str:
         raise
     except Exception as e:  # noqa: BLE001 - any parser failure is a user-facing "can't read"
         raise ExtractError(f"{ext} 파일을 읽지 못했습니다") from e
-    return re.sub(r"<표>|[ \t]+\n", "", t).strip()
+    t = re.sub(r"<표>|[ \t]+\n", "", t).strip()
+    return clean_md_tables(t) if ext == ".pdf" else t
 
 
 def find_date(text: str, name: str = "") -> date | None:
