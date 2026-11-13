@@ -33,7 +33,7 @@ def _hwp(p: Path) -> str:
     code = "import sys; from hwp5.hwp5txt import main; sys.argv = ['hwp5txt', sys.argv[1]]; main()"
     r = subprocess.run([sys.executable, "-c", code, str(p)], capture_output=True, text=True)
     if r.returncode:
-        raise ExtractError("hwp 파일을 읽지 못했다")
+        raise ExtractError("hwp 파일을 읽지 못했습니다")
     return r.stdout
 
 
@@ -56,7 +56,7 @@ def read_text(p: Path) -> str:
     except ExtractError:
         raise
     except Exception as e:  # noqa: BLE001 - any parser failure is a user-facing "can't read"
-        raise ExtractError(f"{ext} 파일을 읽지 못했다") from e
+        raise ExtractError(f"{ext} 파일을 읽지 못했습니다") from e
     return re.sub(r"<표>|[ \t]+\n", "", t).strip()
 
 

@@ -39,7 +39,7 @@ async def access_key(request, call_next):
     key = os.environ.get("APP_ACCESS_KEY", "")
     if key and request.method != "OPTIONS" and request.url.path.startswith("/api/") and request.url.path != "/api/health":
         if not secrets.compare_digest(request.headers.get("x-access-key", ""), key):
-            return JSONResponse({"detail": "접근 키가 필요하다"}, status_code=401)
+            return JSONResponse({"detail": "접근 키가 필요합니다"}, status_code=401)
     return await call_next(request)
 
 
@@ -55,17 +55,17 @@ def health():
 
 @app.exception_handler(RequestValidationError)
 async def _bad_input(_, exc):
-    return JSONResponse({"detail": "입력 오류", "errors": [e["msg"] for e in exc.errors()]}, status_code=400)
+    return JSONResponse({"detail": "입력값이 올바르지 않습니다", "errors": [e["msg"] for e in exc.errors()]}, status_code=400)
 
 
 @app.exception_handler(service.NotFound)
 async def _missing(_, exc):
-    return JSONResponse({"detail": "없는 자료"}, status_code=404)
+    return JSONResponse({"detail": "찾을 수 없는 자료입니다"}, status_code=404)
 
 
 @app.exception_handler(LLMError)
 async def _ai_down(_, exc):
-    return JSONResponse({"detail": f"AI 호출 실패: {exc}"}, status_code=502)
+    return JSONResponse({"detail": f"AI 호출에 실패했습니다: {exc}"}, status_code=502)
 
 
 def pub(r: dict) -> dict:
@@ -166,9 +166,9 @@ def upload_record(file: UploadFile = File(...), cohort_id: int = Form(...), type
     name = file.filename or "문서"
     ext = Path(name).suffix.lower()
     if ext not in SUPPORTED:
-        raise Bad(f"지원하지 않는 형식이다. {', '.join(sorted(SUPPORTED))} 파일을 올려 달라")
+        raise Bad(f"지원하지 않는 형식입니다. {', '.join(sorted(SUPPORTED))} 파일을 올려 주세요")
     if type not in ("meeting", "event", "lesson"):
-        raise Bad("종류는 meeting, event, lesson 중 하나여야 한다")
+        raise Bad("종류는 meeting, event, lesson 중 하나여야 합니다")
     service.require_cohort(conn, cohort_id)
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / f"upload{ext}"
@@ -177,17 +177,17 @@ def upload_record(file: UploadFile = File(...), cohort_id: int = Form(...), type
             while chunk := file.file.read(1 << 20):
                 size += len(chunk)
                 if size > MAX_UPLOAD:
-                    raise Bad("파일이 20MB를 넘는다")
+                    raise Bad("파일이 20MB를 넘습니다")
                 f.write(chunk)
         try:
             text = read_text(path)
         except ExtractError as e:
             raise Bad(str(e))
         if not text:
-            raise Bad("문서에서 글자를 찾지 못했다. 스캔본이면 글자가 있는 파일로 올려 달라")
+            raise Bad("문서에서 글자를 찾지 못했습니다. 스캔본이면 글자가 있는 파일로 올려 주세요")
         day = occurred_on or find_date(text, Path(name).stem)
         if not day:
-            raise Bad("문서에서 날짜를 찾지 못했다. 날짜를 직접 입력해 달라")
+            raise Bad("문서에서 날짜를 찾지 못했습니다. 날짜를 직접 입력해 주세요")
         rec, items, ok = service.add_record(conn, cohort_id, type, title.strip() or Path(name).stem, text, event_name, day)
         dest = Path(db_path()).parent / "docs" / f"{rec['id']}.pdf"  # keep the original (or a PDF rendering of it) for the overlay
         dest.parent.mkdir(parents=True, exist_ok=True)

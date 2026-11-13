@@ -77,7 +77,7 @@ def last_year(conn, today: date, window_days: int):
     notice = ""
     if not rows:  # nothing in the window: show the nearest records instead
         rows = conn.execute(_CARD_SQL + " order by abs(julianday(t.done_on) - julianday(?)) limit 3", (center.isoformat(),)).fetchall()
-        notice = "이 시기에는 기록이 없다. 가장 가까운 시기의 기록을 보여준다." if rows else "등록된 기록이 없다."
+        notice = "이 시기에는 기록이 없습니다. 가장 가까운 시기의 기록을 보여드립니다." if rows else "등록된 기록이 없습니다."
     return {"center": center.isoformat(), "window_days": window_days, "notice": notice, "cards": [_card(conn, r) for r in rows]}
 
 

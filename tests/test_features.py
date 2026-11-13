@@ -42,7 +42,7 @@ def test_f3_answer_has_sources_and_unknown_is_empty(client, cohorts):
     ok = client.post("/api/ask", json={"question": "축제 부스 예산은 얼마였어?"}).json()
     assert len(ok["sources"]) >= 1 and "30만 원" in ok["sources"][0]["quote"]
     none = client.post("/api/ask", json={"question": "학식 메뉴는 뭐였어?"}).json()
-    assert none["sources"] == [] and "기록에 없다" in none["answer"]
+    assert none["sources"] == [] and "기록에 없습니다" in none["answer"]
 
 
 def test_f4_lesson_saved_and_searchable(client, cohorts):
