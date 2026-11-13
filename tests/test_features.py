@@ -170,3 +170,28 @@ def test_stats_and_ask_report_retrieval(client, cohorts):
     assert st["records"] == 1 and st["passages"] >= 1 and st["cohorts"] == 2
     out = client.post("/api/ask", json={"question": "체육대회는 어땠나요?"}).json()
     assert out["retrieved"] >= 1
+
+
+TABLE_BODY = "2025년 5월 3일 MT 임원회의\n일정\n| 예상 시간 | 예상 일정 |\n| --- | --- |\n| 13:30 ~ 14:00 | 인원 점검 |\n| 14:00 ~ 15:10 | 장소 이동 |\n기타 안건은 없다."
+
+
+def test_tables_endpoint_finds_timetable_by_event(client, cohorts):
+    rec(client, cohorts[0], title="MT 임원회의지", event_name="MT", occurred_on="2025-05-03", body=TABLE_BODY)
+    rec(client, cohorts[0], title="체육대회", event_name="체육대회", body="표가 없는 문서다.")
+    t = client.get("/api/tables", params={"q": "MT 타임테이블"}).json()
+    assert len(t) == 1 and t[0]["event_name"] == "MT" and "14:00 ~ 15:10" in t[0]["table"] and t[0]["caption"] == "일정"
+    assert client.get("/api/tables", params={"q": "체육대회 타임테이블"}).json() == []
+
+
+def test_timetable_question_retrieves_table_passage(client, cohorts):
+    rec(client, cohorts[0], title="MT 임원회의지", event_name="MT", occurred_on="2025-05-03", body=TABLE_BODY)
+    from app import db, service
+    ps = service.search(db.connect(), "MT 타임테이블 알려줘")
+    assert any("| 13:30 ~ 14:00 |" in p["body"] for p in ps)
+
+
+def test_chunker_keeps_a_table_whole():
+    from app.chunks import chunk_text
+    table = "\n".join(["| 시간 | 일정 |", "| --- | --- |"] + [f"| 1{i}:00 | 일정 {i} |" for i in range(40)])
+    chunks = chunk_text("머리말\n" + table + "\n맺음말")
+    assert any(c.count("| ") >= 40 for c in chunks)

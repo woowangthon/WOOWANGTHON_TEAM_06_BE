@@ -245,6 +245,11 @@ def timeline_last_year(date: date = Query(...), window_days: int = Query(14, ge=
     return service.last_year(conn, date, window_days)
 
 
+@app.get("/api/tables")
+def find_tables(q: str = Query("", max_length=200), conn=Depends(db)):
+    return service.tables(conn, q)
+
+
 @app.get("/api/graph")
 def knowledge_graph(conn=Depends(db)):
     return service.graph(conn)

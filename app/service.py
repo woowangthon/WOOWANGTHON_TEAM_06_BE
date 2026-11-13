@@ -3,7 +3,12 @@ from datetime import date, timedelta
 
 from senior_ai import LLMError, extract_timeline, keywords
 
+import re
+
 from .db import add_chunks
+
+TABLE_WORDS = ('타임테이블', '타임 테이블', '시간표', '일정표', '스케줄', '일정')
+TIME_RE = re.compile(r'\d{1,2}\s*[:시]\s*\d{0,2}')
 
 
 class NotFound(Exception):
@@ -85,6 +90,8 @@ def search(conn, question: str, limit: int = 10, per_record: int = 3):
     """Passage retrieval. A passage scores the length of every keyword it contains; a keyword that appears in the
     record's title or event name lifts all of that record's passages (e.g. '정기총회' finds the whole 총회 documents)."""
     kws = keywords(question)
+    want_table = any(w in question for w in TABLE_WORDS)
+    kws = [k for k in kws if k not in TABLE_WORDS] or kws
     if not kws:
         return []
     cand: set[int] = set()
@@ -95,11 +102,18 @@ def search(conn, question: str, limit: int = 10, per_record: int = 3):
             cand |= {r[0] for r in conn.execute("select id from chunks where text like ?", (f"%{k}%",))}
         cand |= {r[0] for r in conn.execute(
             "select c.id from chunks c join records r on r.id=c.record_id where r.title like ? or r.event_name like ?", (f"%{k}%", f"%{k}%"))}
+    if want_table:  # a timetable question: bring in the table passages of the matching events even without a word match
+        for k in kws:
+            cand |= {r[0] for r in conn.execute(
+                "select c.id from chunks c join records r on r.id=c.record_id where c.text like '%| ---%' and (r.title like ? or r.event_name like ?)",
+                (f"%{k}%", f"%{k}%"))}
     rows = []
     for cid in cand:
         c = conn.execute("select c.id, c.record_id, c.text, r.title, r.event_name, r.occurred_on from chunks c join records r on r.id=c.record_id where c.id=?", (cid,)).fetchone()
         head = c["title"] + " " + c["event_name"]
         score = sum(len(k) * ((k in c["text"]) + (k in head)) for k in kws)
+        if want_table and "| ---" in c["text"] and TIME_RE.search(c["text"]):
+            score += 12
         rows.append((score, c))
     rows.sort(key=lambda x: (-x[0], x[1]["record_id"], x[1]["id"]))
     out, used = [], {}
@@ -224,3 +238,43 @@ def stats(conn):
         "decisions": one("select count(*) from decisions"), "with_original": one("select count(*) from records where pdf_path != ''"),
         "characters": one("select coalesce(sum(length(body)), 0) from records"),
     }
+
+
+def _table_blocks(body: str):
+    """(caption, table text) for every markdown table in a document; caption = the line just above it."""
+    lines, blocks, i = body.splitlines(), [], 0
+    while i < len(lines):
+        if lines[i].startswith("|"):
+            j = i
+            while j < len(lines) and lines[j].startswith("|"):
+                j += 1
+            if j - i >= 3:
+                cap = next((l.strip() for l in reversed(lines[:i]) if l.strip()), "")
+                blocks.append((cap, "\n".join(lines[i:j])))
+            i = j
+        else:
+            i += 1
+    return blocks
+
+
+def tables(conn, q: str, limit: int = 8):
+    """Tables (timetables, schedules, name lists...) whose document, event or content matches the query."""
+    kws = keywords(q)
+    want_time = any(w in q for w in TABLE_WORDS)
+    kws = [k for k in kws if k not in TABLE_WORDS]
+    if not kws and not want_time:
+        return []
+    out = []
+    for r in conn.execute("select id, title, event_name, occurred_on, body, pdf_path != '' as has_pdf from records where body like '%| ---%' order by occurred_on desc"):
+        for cap, tbl in _table_blocks(r["body"]):
+            has_time = bool(TIME_RE.search(tbl))
+            if want_time and not has_time:
+                continue
+            hay = f"{r['title']} {r['event_name']} {cap} {tbl}"
+            score = sum(len(k) * ((k in hay) + (k in r["event_name"]) * 2) for k in kws)
+            if kws and score == 0:
+                continue
+            out.append({"score": score + (3 if has_time else 0), "record_id": r["id"], "title": r["title"], "event_name": r["event_name"],
+                        "occurred_on": r["occurred_on"], "caption": cap, "table": tbl, "has_pdf": bool(r["has_pdf"])})
+    out.sort(key=lambda x: (-x["score"], x["occurred_on"]), reverse=False)
+    return out[:limit]
