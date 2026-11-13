@@ -17,6 +17,7 @@ python -m app.seed                     # DB를 시연용 시드로 초기화
 uvicorn app.main:app --port 8000
 ```
 
+- `LLM_PROVIDER=claude`는 로컬에 로그인된 Claude Code(`claude -p`)를 써서 내 Claude 요금제로 답변한다(배포 서버에서는 못 씀). 실행 전에 터미널에서 `claude auth status`로 로그인 상태를 확인한다.
 - `LLM_PROVIDER=fake`(기본)는 키가 필요 없다. 실제 답변은 `LLM_PROVIDER=gemini` + `GEMINI_API_KEY`(+ `GEMINI_MODEL`)로 켠다. '선배에게 묻기'는 문서를 약 500자 구간으로 나눠 관련 구간을 찾은 뒤 모델이 그 구간만으로 답하고, 인용 구절이 원문에 있는지 서버가 다시 확인한다.
 - 시드 재적재: `python -m app.seed` (기존 데이터는 지워진다).
 - 테스트: `pytest` (항상 fake LLM, 네트워크 없음).
