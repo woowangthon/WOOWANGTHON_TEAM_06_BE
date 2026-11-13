@@ -32,12 +32,35 @@ def md_table(rows: list[list[str]]) -> str:
     return "\n".join(out + ["| " + " | ".join(r) + " |" for r in rows[1:]])
 
 
+def _is_red(color: str) -> bool:
+    m = re.fullmatch(r"#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})", color.strip())
+    if not m:
+        return False
+    r, g, b = (int(x, 16) for x in m.groups())
+    return r >= 190 and g <= 90 and b <= 90
+
+
+def red(t: str) -> str:
+    """Text that was red in the original (e.g. a time that changed) is kept as {{r:...}} so the page can show it in red."""
+    return "{{r:" + t + "}}" if t.strip() else t
+
+
 def _hwpx(p: Path) -> str:
     import xml.etree.ElementTree as ET
     hp = "{http://www.hancom.co.kr/hwpml/2011/paragraph}"
+    red_ids: set[str] = set()
+    with zipfile.ZipFile(p) as z:
+        if "Contents/header.xml" in z.namelist():
+            for el in ET.fromstring(z.read("Contents/header.xml")).iter():
+                if el.tag.endswith("}charPr") and _is_red(el.get("textColor", "")):
+                    red_ids.add(el.get("id", ""))
+
+    def run_text(run) -> str:
+        t = "".join(x.text or "" for x in run.findall(hp + "t"))
+        return red(t) if run.get("charPrIDRef") in red_ids else t
 
     def cell_text(tc) -> str:
-        return " ".join(t.text for t in tc.iter(hp + "t") if t.text)
+        return " ".join("".join(run_text(r) for r in para.findall(hp + "run")).strip() for para in tc.iter(hp + "p")).strip()
 
     def table(tbl) -> str:
         return md_table([[cell_text(tc) for tc in tr.findall(hp + "tc")] for tr in tbl.findall(hp + "tr")])
@@ -47,14 +70,10 @@ def _hwpx(p: Path) -> str:
         for n in sorted(z.namelist()):
             if n.startswith("Contents/section") and n.endswith(".xml"):
                 for para in ET.fromstring(z.read(n)).findall(hp + "p"):
-                    own = []
-                    tables = []
+                    own, tables = [], []
                     for run in para.findall(hp + "run"):
-                        for child in run:
-                            if child.tag == hp + "t" and child.text:
-                                own.append(child.text)
-                            elif child.tag == hp + "tbl":
-                                tables.append(table(child))
+                        own.append(run_text(run))
+                        tables.extend(table(t) for t in run.findall(hp + "tbl"))
                     line = html.unescape("".join(own)).strip()
                     if line:
                         out.append(line)
@@ -107,8 +126,69 @@ def _odt_blocks(odt: Path) -> str:
     return "\n".join(out)
 
 
+def _hwp_html(p: Path) -> str:
+    """hwp -> xhtml + css (pyhwp keeps text colours) -> text with markdown tables and {{r:...}} for red text."""
+    import tempfile
+    import xml.etree.ElementTree as ET
+    X = "{http://www.w3.org/1999/xhtml}"
+    with tempfile.TemporaryDirectory() as tmp:
+        code = "import sys; from hwp5.hwp5html import main; sys.argv=['hwp5html','--output',sys.argv[1],sys.argv[2]]; main()"
+        r = subprocess.run([sys.executable, "-c", code, tmp, str(p)], capture_output=True, text=True, timeout=120)
+        page, css = Path(tmp) / "index.xhtml", Path(tmp) / "styles.css"
+        if r.returncode or not page.exists():
+            raise ExtractError("hwp 파일을 읽지 못했습니다")
+        red_ids = {m[1] for m in re.finditer(r"span\.charshape-(\d+)\s*\{[^}]*?color:\s*(#[0-9a-fA-F]{6})", css.read_text(encoding="utf-8", errors="ignore"))
+                   if _is_red(m[2])} if css.exists() else set()
+        root = ET.fromstring(page.read_bytes())
+
+    def inline(el) -> str:
+        out = [el.text or ""]
+        for ch in el:
+            t = inline(ch)
+            if ch.tag == X + "span" and any(c.startswith("charshape-") and c.split("-")[1] in red_ids for c in (ch.get("class") or "").split()):
+                t = red(t)
+            out.append(t + (ch.tail or ""))
+        return "".join(out).replace("\r", "")
+
+    def table(tbl) -> str:
+        rows = []
+        for tr in tbl.iter(X + "tr"):
+            cells = []
+            for td in tr:
+                if td.tag in (X + "td", X + "th"):
+                    cells.append(" ".join(x for x in (inline(pp).strip() for pp in td.iter(X + "p")) if x))
+                    cells.extend([""] * (int(td.get("colspan", "1") or 1) - 1))
+            rows.append(cells)
+        return md_table(rows)
+
+    out: list[str] = []
+
+    def walk(el):
+        for ch in el:
+            if ch.tag == X + "table":
+                t = table(ch)
+                if t:
+                    out.append(t)
+            elif ch.tag == X + "p":
+                t = re.sub(r"[ \t]+", " ", inline(ch)).strip()
+                if t:
+                    out.append(t)
+            elif ch.tag in (X + "div", X + "body", X + "section", X + "ul", X + "li"):
+                walk(ch)
+
+    body = root.find(X + "body")
+    walk(body if body is not None else root)
+    return "\n".join(out)
+
+
 def _hwp(p: Path) -> str:
-    """hwp -> odt (keeps tables) -> markdown-ish text; falls back to plain hwp5txt text."""
+    """hwp text with tables and colours; falls back to the odt route, then to plain hwp5txt."""
+    try:
+        text = _hwp_html(p)
+        if text.strip():
+            return text
+    except (ExtractError, ET_ParseError, subprocess.SubprocessError, OSError):
+        pass
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         odt = Path(tmp) / "doc.odt"
