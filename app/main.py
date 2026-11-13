@@ -12,7 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
-from senior_ai import LLMError, answer_question, next_interview_question
+from senior_ai import LLMError, answer_question
 
 from . import service
 from .db import connect, db_path
@@ -245,6 +245,20 @@ def timeline_last_year(date: date = Query(...), window_days: int = Query(14, ge=
     return service.last_year(conn, date, window_days)
 
 
+@app.get("/api/briefing")
+def get_briefing(date: date = Query(...), window_days: int = Query(14, ge=0, le=120), refresh: bool = False, conn=Depends(db)):
+    return service.briefing(conn, date, window_days, refresh)
+
+
+class DraftIn(BaseModel):
+    timeline_item_id: int
+
+
+@app.post("/api/decisions/suggest")
+def suggest_decision_draft(b: DraftIn, conn=Depends(db)):
+    return service.decision_draft(conn, b.timeline_item_id)
+
+
 @app.get("/api/tables")
 def find_tables(q: str = Query("", max_length=200), conn=Depends(db)):
     return service.tables(conn, q)
@@ -269,8 +283,7 @@ def ask(b: AskIn, conn=Depends(db)):
 @app.post("/api/interviews/next")
 def interview_next(b: InterviewNextIn, conn=Depends(db)):
     service.require_cohort(conn, b.cohort_id)
-    q = next_interview_question(b.event_name, service.asked_questions(conn, b.cohort_id, b.event_name))
-    return {"question": q, "done": q is None}
+    return service.next_interview(conn, b.cohort_id, b.event_name)
 
 
 @app.post("/api/interviews/answer", status_code=201)

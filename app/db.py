@@ -27,6 +27,7 @@ create virtual table if not exists records_fts using fts5(title, body, tokenize=
 create table if not exists chunks (
   id integer primary key, record_id integer not null references records(id), idx integer not null, text text not null);
 create index if not exists idx_chunks_record on chunks(record_id);
+create table if not exists briefings (key text primary key, body text not null, created_at text not null);
 create virtual table if not exists chunks_fts using fts5(text, tokenize='trigram');
 """
 

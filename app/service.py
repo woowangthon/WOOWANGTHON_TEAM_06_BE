@@ -1,7 +1,10 @@
 """All DB logic. Routes stay thin; AI calls come from senior_ai."""
 from datetime import date, timedelta
 
-from senior_ai import LLMError, extract_timeline, keywords
+import json
+from datetime import datetime
+
+from senior_ai import LLMError, extract_timeline, interview_next, keywords, make_briefing, provider, suggest_decision
 
 import re
 
@@ -45,6 +48,7 @@ def add_record(conn, cohort_id, type_, title, body, event_name, occurred_on: dat
                 items.append({**it, "id": c.lastrowid})
         except LLMError:
             ok = False
+    _bust(conn)
     conn.commit()
     return get_record(conn, rid), items, ok
 
@@ -178,6 +182,8 @@ def update_record(conn, rid, title=None, event_name=None, occurred_on: date | No
     if new["body"] != old["body"]:
         _drop_chunks(conn, rid)
         add_chunks(conn, rid, new["body"])
+    _bust(conn)
+    _bust(conn)
     conn.commit()
     return get_record(conn, rid)
 
@@ -192,6 +198,7 @@ def delete_record(conn, rid):
     _drop_chunks(conn, rid)
     conn.execute("delete from records_fts where rowid=?", (rid,))
     conn.execute("delete from records where id=?", (rid,))
+    _bust(conn)
     conn.commit()
     return rec
 
@@ -278,3 +285,75 @@ def tables(conn, q: str, limit: int = 8):
                         "occurred_on": r["occurred_on"], "caption": cap, "table": tbl, "has_pdf": bool(r["has_pdf"])})
     out.sort(key=lambda x: (-x["score"], x["occurred_on"]), reverse=False)
     return out[:limit]
+
+
+def _bust(conn):
+    """Briefings are built from the records, so any change to them invalidates the saved ones."""
+    conn.execute("delete from briefings")
+
+
+def _groups(cards):
+    """Last-year cards -> one group per (cohort, event) for the briefing prompt."""
+    groups: dict = {}
+    for c in cards:
+        g = groups.setdefault((c["cohort_id"], c["event_name"] or c["record_title"]),
+                              {"event": c["event_name"] or c["record_title"], "cohort": c["cohort_name"], "docs": [], "lessons": [], "decisions": []})
+        if not any(d["record_id"] == c["record_id"] for d in g["docs"]):
+            g["docs"].append({"record_id": c["record_id"], "title": c["record_title"], "date": c["done_on"], "note": c["note"]})
+        for l in c["lessons"]:
+            if not any(x["record_id"] == l["id"] for x in g["lessons"]):
+                g["lessons"].append({"record_id": l["id"], "title": l["title"], "text": l["body"]})
+        for d in c["decisions"]:
+            if d not in g["decisions"]:
+                g["decisions"].append({"body": d["body"], "reason": d["reason"]})
+    return list(groups.values())
+
+
+def briefing(conn, today: date, window_days: int = 14, refresh: bool = False):
+    """AI briefing of last year's records around today; saved per date until the records change."""
+    key = f"{today}|{window_days}|{provider()}"
+    if not refresh:
+        row = conn.execute("select body from briefings where key=?", (key,)).fetchone()
+        if row:
+            return {**json.loads(row[0]), "cached": True}
+    cards = last_year(conn, today, window_days)["cards"]
+    groups = _groups(cards)
+    for g in groups:  # give the model what the documents actually say, not just their titles
+        for d in g["docs"]:
+            d["excerpt"] = conn.execute("select substr(body, 1, 1200) from records where id=?", (d["record_id"],)).fetchone()[0]
+    result = make_briefing(today, groups)
+    titles = {d["record_id"]: d["title"] for g in groups for d in g["docs"]} | {l["record_id"]: l["title"] for g in groups for l in g["lessons"]}
+    result["records"] = {str(i): t for i, t in titles.items()}
+    result["events"] = [g["event"] for g in groups]
+    result["provider"] = provider()
+    conn.execute("insert or replace into briefings(key, body, created_at) values (?,?,?)",
+                 (key, json.dumps(result, ensure_ascii=False), datetime.now().isoformat(timespec="seconds")))
+    conn.commit()
+    return {**result, "cached": False}
+
+
+def interview_turns(conn, cohort_id, event_name):
+    return [dict(r) for r in conn.execute(
+        "select question, answer from interview_turns where cohort_id=? and event_name=? order by id", (cohort_id, event_name))]
+
+
+def next_interview(conn, cohort_id, event_name):
+    turns = interview_turns(conn, cohort_id, event_name)
+    out = interview_next(event_name, turns, search(conn, event_name, limit=8))
+    return {**out, "done": out["question"] is None, "answered": len(turns)}
+
+
+def decision_draft(conn, timeline_item_id):
+    """AI draft for this year's decision on a card: a person edits and saves it."""
+    item = _one(conn, "select t.*, r.event_name from timeline_items t join records r on r.id=t.record_id where t.id=?", timeline_item_id)
+    ev = item["event_name"]
+    lessons = [{"record_id": r["id"], "title": r["title"], "text": r["body"]} for r in conn.execute(
+        "select id, title, body from records where type='lesson' and event_name=? and event_name!='' order by occurred_on desc limit 3", (ev,))]
+    past = [dict(r) for r in conn.execute(
+        """select d.body, d.reason from decisions d join timeline_items t on t.id=d.timeline_item_id join records r on r.id=t.record_id
+           where r.event_name=? and ?!='' order by d.decided_on desc limit 3""", (ev, ev))]
+    passages = search(conn, f"{ev} {item['title']}", limit=5)
+    out = suggest_decision(ev, item["title"], item["note"], lessons, past, passages)
+    titles = {l["record_id"]: l["title"] for l in lessons} | {p["id"]: p["title"] for p in passages}
+    return {"body": out["body"], "reason": out["reason"], "provider": provider(),
+            "sources": [{"record_id": i, "title": titles.get(i, "")} for i in out["record_ids"]]}
