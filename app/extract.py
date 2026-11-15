@@ -253,6 +253,7 @@ def read_text(p: Path) -> str:
         raise
     except Exception as e:  # noqa: BLE001 - any parser failure is a user-facing "can't read"
         raise ExtractError(f"{ext} 파일을 읽지 못했습니다") from e
+    t = t.replace("\x01", " ")  # some PDF fonts (e.g. Chrome print output) encode spaces as U+0001
     t = re.sub(r"<표>|[ \t]+\n", "", t).strip()
     return clean_md_tables(t) if ext == ".pdf" else t
 
